@@ -1,0 +1,16 @@
+Matheus:
+
+- Melhorar a motivação do trabalho
+- Melhorar as referências do trabalho
+- Citar a ideia principal 
+- Resultados: Melhorar as conclusões e justificativas das variáveis
+- Focar em variáveis que afetam mais o usuário de catão de crédito
+- Evitar variável duplicados
+- Incluir algum modelo clássico
+- Melhorar as conclusões finais
+
+Osvaldo:
+
+- Adicionar a variável de juros
+- Verificar as variáveis defasadas
+- Adicionar variáveis de expectativas
