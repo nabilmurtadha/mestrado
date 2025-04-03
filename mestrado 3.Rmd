@@ -1,0 +1,779 @@
+---
+title: "projeto mestrado 3"
+author: "Nabi Murtadha"
+date: "2024-12-05"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r}
+# pacotes
+library(tidymodels)
+library(glmnet)
+library(tidyverse)
+library(rbcb)
+library(quantmod)
+library(bestNormalize)
+library(gghighlight)
+library(corrplot)
+
+```
+
+
+
+## Puxando os valores de inadimplência de cartão de crédito.
+
+# inadimplencia geral pessoa fisica
+
+```{r}
+inad_mercado <- get_series(list("inad_mercado" = 21084))
+```
+
+
+# inadimplência cartão de crédito pessoa física
+```{r}
+library(rbcb)
+inad_cartao <- get_series(list("inad_cartao" = 21129))
+```
+
+
+```{r}
+inad_cartao %>% mutate(date = as.Date(date), inad_cartao = inad_cartao/100) %>%
+  filter(date < "2024-01-01") %>%
+  ggplot() +
+  aes(x = date, y = inad_cartao) +
+  geom_line(linewidth = 1, color = "#0019ff") +
+  scale_x_date(breaks = "2 year",date_labels = "%Y-%m")+
+  scale_y_continuous(labels = scales::percent)+
+  theme_minimal() +
+  labs(x = "Data", y = "Taxa de Inadimplência", caption = "Fonte: Banco Central")+
+  theme(axis.text.y = element_text(size = 10))
+```
+
+FBCF - construção civil
+```{r}
+fbcf <- read.csv2("C:/Users/nabil/Documents/Mestrado/Catolica/0. Dissertação/1. Base de dados/FBCF - construção civil.csv")
+names(fbcf) <- c("data","indicador_construcao_civil")
+
+fbcf <- fbcf %>% select(data,indicador_construcao_civil) %>% 
+  mutate(data = as.Date(paste0(data,".01"),format = "%Y.%m.%d"))
+```
+
+Índice nacional de construção civil (INCC)
+```{r}
+incc_di <- read.csv2("C:/Users/nabil/Documents/Mestrado/Catolica/0. Dissertação/1. Base de dados/INCC-DI.csv")
+names(incc_di) <- c("data","incc_di")
+
+incc_di <- incc_di %>% select(data,incc_di) %>% 
+  mutate(data = as.Date(paste0(data,".01"),format = "%Y.%m.%d"))
+```
+
+Requerentes de Seguro-Desemprego
+```{r}
+seguro_desemprego <- openxlsx::read.xlsx("C:/Users/nabil/Documents/Mestrado/Catolica/0. Dissertação/1. Base de dados/3- Série Histórica do Seguro-Desemprego - 2000 a 2023 - Atualizado em 11.01.2024.xlsx",sheet = "tratada")
+seguro_desemprego <- seguro_desemprego %>% mutate(data = as.Date(data, format = "%Y/%m/%d"))
+```
+
+Taxa de desemprego
+```{r}
+PME <- read.csv2("C:/Users/nabil/Documents/Mestrado/Catolica/0. Dissertação/1. Base de dados/taxa_desemprego_pme.csv")
+PME <- PME %>% mutate(data = as.Date(data, format = "%d/%m/%Y"))
+
+PNADC <- read.csv2("C:/Users/nabil/Documents/Mestrado/Catolica/0. Dissertação/1. Base de dados/taxa_desemprego_pnad.csv")
+PNADC <- PNADC %>% mutate(data = as.Date(data, format = "%d/%m/%Y"))
+taxa_desemprego <- rbind(PME %>% filter(data < min(PNADC$data)),PNADC)
+rm(PME)
+rm(PNADC)
+```
+
+Índice de confiança do consumidor (ICC)
+```{r}
+icc <-  read.csv2("C:/Users/nabil/Documents/Mestrado/Catolica/0. Dissertação/1. Base de dados/ICC com ajuste sazonal.csv")
+
+icc <- icc %>% mutate(data = as.Date(Data, format = "%d/%m/%Y")) %>% select(-Data)
+```
+
+Sondagem do Consumidor
+```{r}
+sondagem_consumidor <- read.csv2("C:/Users/nabil/Documents/Mestrado/Catolica/0. Dissertação/1. Base de dados/expecatativa ipca consumidor.csv")
+
+sondagem_consumidor <- sondagem_consumidor %>%
+  mutate(data = as.Date(Data, format = "%d/%m/%Y")) %>% select(-Data)
+```
+
+Indice bovespa 
+```{r}
+library(quantmod)
+getSymbols("^BVSP",
+           periodicity='monthly', 
+           from='2000-01-01',
+           to='2024-01-01'
+           )
+
+
+BVSP <- data.frame(data = index(BVSP),coredata(BVSP))
+BVSP <- BVSP %>% select(data,BVSP.Adjusted)
+```
+
+Indice Brasil 50
+```{r}
+getSymbols("BRAX11.SA",
+           periodicity='monthly', 
+           from='2000-01-01',
+           to='2024-01-01'
+           )
+
+BRAX11.SA <- data.frame(data = index(BRAX11.SA),coredata(BRAX11.SA))
+BRAX11.SA <- BRAX11.SA %>% select(data,BRAX11.SA.Adjusted)
+```
+
+Concessões de crédito com recursos livres - Pessoas físicas - Total
+```{r}
+concessoes_credito <- get_series(list("concessoes_credito" = 20662)) 
+```
+
+Saldo da carteira de crédito com recursos livres - Pessoas físicas - Total
+```{r}
+saldo_credito <- get_series(list("saldo_credito" = 20570))
+```
+
+Reservas bancárias (saldo em final de período)
+```{r}
+reservas_bancarias <- get_series(list("saldo_reservas" = 1787)) 
+```
+
+Dívida mobiliária federal (saldos) - Posição em carteira - Título indexado a Selic - LFT
+```{r}
+divida_titulo_selic <- get_series(list("divida_LFT" = 10634)) 
+```
+
+Dívida mobiliária federal (saldos) - Posição em carteira - Título indexado ao IPC-A - NTN-B
+```{r}
+divida_titulo_ipca <- get_series(list("divida_NTNB" = 10642))
+```
+
+Índice de Atividade Econômica do Banco Central (IBC-Br)
+```{r}
+ibc_br <- get_series(list("ibc_br" = 24364))
+```
+
+Produção industrial
+```{r}
+industrial <- get_series(list("prod_industrial" = 21859))
+```
+
+PIB mensal - valores correntes
+```{r}
+pib_mensal <- get_series(list("pib_mensal" = 4380))
+```
+
+Crise Financeira
+```{r}
+#2007
+#2008
+#2015
+#2016
+#2020
+
+crise_fin <- data.frame(date = pib_mensal$date,
+                        crise_fin = ifelse(floor_date(pib_mensal$date,"year") %in%
+                                             c("2007-01-01","2008-01-01","2015-01-01","2016-01-01","2020-01-01"),1,0))
+```
+
+Resolução n.4549/2017
+```{r}
+res_4549 <- data.frame(date = pib_mensal$date,
+                        res_2529 = ifelse(pib_mensal$date > "2017-01-01",1,0))
+
+```
+
+
+# Cambio
+```{r}
+cambio_dolar <- get_series(list("cambio_dolar" = 3697))
+```
+
+
+# Divida publica
+```{r}
+estoquedpf <- openxlsx::read.xlsx("C:/Users/nabil/Documents/Mestrado/Catolica/0. Dissertação/1. Base de dados/estoque divida publica federal.xlsx", sheet = 2) %>% mutate(data = as.Date(data, origin = "1899-12-30"))
+```
+
+# Selic
+```{r}
+selic <- get_series(list("selic_mensal" = 4390))
+```
+
+# Inflação
+```{r}
+ipca <- openxlsx::read.xlsx("C:/Users/nabil/Documents/Mestrado/Catolica/0. Dissertação/1. Base de dados/ipca_mensal.xlsx", sheet = 1) %>% mutate(data = as.Date(data, origin = "1899-12-30"))
+```
+
+Expectativas do mercado (1 mês)
+```{r}
+# X <- read.csv(url("https://olinda.bcb.gov.br/olinda/servico/Expectativas/versao/v1/odata/ExpectativaMercadoMensais?$format=text/csv&$select=Indicador,Data,DataReferencia,Media,Mediana,numeroRespondentes,baseCalculo"))
+# 
+# saveRDS(X,"expectativas.RDS")
+
+X <- readRDS("expectativas.RDS")
+
+```
+
+
+```{r}
+datas <- X %>% 
+  mutate(DataReferencia2 = as.Date(paste0("01/",DataReferencia), format = "%d/%m/%Y")) %>% 
+  group_by(Indicador, Data) %>% 
+  summarise(min_dataref = min(DataReferencia2)) %>% 
+  ungroup() %>% 
+  group_by(Indicador,min_dataref) %>% 
+  summarise(min_datacalc = min(Data)) %>% 
+  ungroup()
+```
+
+```{r}
+expectativas <- X %>% mutate(DataReferencia2 = as.Date(paste0("01/",DataReferencia), format = "%d/%m/%Y")) %>% 
+  inner_join(datas, by = c("DataReferencia2" = "min_dataref", "Data" = "min_datacalc", "Indicador")) %>% 
+  filter(baseCalculo == 0)
+```
+
+
+```{r}
+## CAMBIO
+
+cambio_dolar_exp <- expectativas %>% filter(Indicador == "Câmbio") %>% 
+  mutate(exp_cambio_dolar = as.numeric(str_replace(Mediana, "[,]", "."))) %>% 
+  select(DataReferencia2,exp_cambio_dolar) %>% 
+  filter(DataReferencia2 < "2024-01-01")
+
+cambio_dolar %>% 
+  inner_join(cambio_dolar_exp, by = c("date" = "DataReferencia2")) %>% 
+  pivot_longer(names_to = "variavel", cols = !contains("date")) %>% 
+  ggplot(aes(x = date, y = value, color = variavel))+
+  geom_line()
+
+
+## IPCA
+ipca_exp <- expectativas %>% filter(Indicador == "IPCA") %>% 
+  mutate(exp_icpa = as.numeric(str_replace(Mediana, "[,]", "."))) %>% 
+  select(DataReferencia2,exp_icpa) %>% 
+  filter(DataReferencia2 < "2024-01-01")
+
+ipca %>% 
+  inner_join(ipca_exp, by = c("data" = "DataReferencia2")) %>% 
+  pivot_longer(names_to = "variavel", cols = !contains("data")) %>% 
+  ggplot(aes(x = data, y = value, color = variavel))+
+  geom_line()
+
+## TAXA DESEMPREGO
+
+taxa_desemprego_exp <- expectativas %>% filter(Indicador == "Taxa de desocupação") %>% 
+  mutate(exp_desemprego = as.numeric(str_replace(Mediana, "[,]", "."))) %>% 
+  select(DataReferencia2,exp_desemprego) %>% 
+  filter(DataReferencia2 < "2024-01-01")
+
+
+taxa_desemprego %>% 
+  inner_join(taxa_desemprego_exp, by = c("data" = "DataReferencia2")) %>% 
+  pivot_longer(names_to = "variavel", cols = !contains("data")) %>% 
+  ggplot(aes(x = data, y = value, color = variavel))+
+  geom_line()
+
+```
+
+## Montando a base
+```{r}
+base <- inad_cartao %>% 
+  left_join(cambio_dolar) %>% 
+  left_join(divida_titulo_ipca) %>% 
+  left_join(divida_titulo_selic) %>% 
+  left_join(estoquedpf, by = c("date" = "data")) %>% 
+  left_join(fbcf, by = c("date" = "data")) %>% 
+  left_join(ibc_br) %>% 
+  left_join(icc, by = c("date" = "data")) %>% 
+  left_join(incc_di, by = c("date" = "data")) %>% 
+  left_join(industrial) %>% 
+  left_join(ipca, by = c("date" = "data")) %>% 
+  left_join(pib_mensal) %>% 
+  left_join(reservas_bancarias) %>% 
+  left_join(seguro_desemprego, by = c("date" = "data")) %>% 
+  left_join(selic) %>% 
+  left_join(sondagem_consumidor, by = c("date" = "data")) %>% 
+  left_join(taxa_desemprego, by = c("date" = "data")) %>% 
+  left_join(BRAX11.SA, by = c("date" = "data")) %>% 
+  left_join(BVSP, by = c("date" = "data")) %>% 
+  left_join(concessoes_credito) %>% 
+  left_join(inad_cartao) %>% 
+  left_join(saldo_credito) %>% 
+  left_join(cambio_dolar_exp, by = c("date" = "DataReferencia2")) %>%  
+  left_join(ipca_exp, by = c("date" = "DataReferencia2")) %>% 
+  left_join(crise_fin) %>% 
+  left_join(res_4549) %>% 
+  janitor::clean_names() %>% 
+  filter(date < "2024-01-01")
+```
+
+## Lags
+
+```{r}
+
+criar_defasagens <- function(df, coluna, n_defasagens = 12) {
+  # Verifica se a coluna existe no dataframe
+  if (!coluna %in% colnames(df)) {
+    stop("A coluna especificada não existe no dataframe.")
+  }
+  
+  # Cria as colunas de defasagens
+  for (i in 1:n_defasagens) {
+    nome_coluna <- paste0(coluna, "_lag_", i)
+    df[[nome_coluna]] <- dplyr::lag(df[[coluna]], n = i)
+  }
+  
+  return(df)
+}
+
+for(i in variable.names(base %>% select(-date,-inad_cartao))){
+  base <- criar_defasagens(base, i, n_defasagens = 12)
+}
+```
+
+
+```{r}
+# library(bestNormalize)
+# best_norm <- function(col) { # create a function with the name my_function
+#   bestNormalize::bestNormalize(col)[[1]]
+# }
+# 
+# set.seed(1234)
+# base2 <- base %>% 
+#   mutate_at(.vars = base %>% 
+#               select(contains("lag")) %>%
+#               variable.names(),
+#             best_norm)
+```
+
+
+## Substituindo os valores por variações anuais
+
+```{r}
+# yoy <- function(col){
+#   case_when(col/lag(col,12) == "Inf"~1,
+#             col/lag(col,12) == "-Inf" ~ -1,
+#             TRUE ~ col/lag(col,12))
+# }
+# 
+# base2 <- base2 %>% 
+#   mutate_at(.vars = base %>% 
+#               select(-date,-crise_fin,-res_2529) %>%
+#               variable.names(),
+#             yoy)
+# 
+# base2 <- base2 %>% filter(date > "2012-02-01")
+# 
+# saveRDS(base2,"base3_mestrado.RDS")
+```
+
+## transoformar em primeira diferença
+
+```{r}
+yoy <- function(col){
+  col - lag(col)
+}
+
+base2 <- base %>% 
+  mutate_at(.vars = base %>% 
+              select(-date,-crise_fin,-res_2529) %>%
+              variable.names(),
+            yoy)
+
+base2 <- base2 %>% filter(date > "2011-03-01")
+
+#saveRDS(base2,"base3_mestrado.RDS")
+
+
+base2 <- readRDS("base3_mestrado.RDS")
+```
+
+
+
+## Fazendo a tabela de correlação
+
+```{r}
+library(corrplot)
+correlacao <- stats::cor(base2 %>% select(-date), use = "complete.obs")
+
+correlacao <- data.frame(coredata(correlacao)) %>% rownames_to_column("variavel") %>% select(variavel,inad_cartao) %>% 
+  mutate(cor_absoluta = abs(inad_cartao))
+
+data.frame(coredata(correlacao)) %>% clipr::write_clip(dec = ",")
+
+correlacao %>% arrange(desc(cor_absoluta)) %>% 
+  select(-cor_absoluta) %>% clipr::write_clip(dec = ",")
+
+# optimal lag
+
+max_cor <- correlacao %>% 
+  select(-cor_absoluta) %>% 
+  mutate(var_sub = str_remove_all(variavel, "_lag_[1-9][0-9]*")) %>% 
+  group_by(var_sub) %>% 
+  summarise(max_cor = max(abs(inad_cartao)))
+
+
+optimal_lag <- correlacao %>% 
+  select(-cor_absoluta) %>% 
+  mutate(var_sub = str_remove_all(variavel, "_lag_[1-9][0-9]*"),
+         max_cor = abs(inad_cartao)) %>%
+  inner_join(max_cor, by = c("var_sub","max_cor"))
+
+optimal_lag %>% 
+  arrange(desc(max_cor)) %>% 
+  clipr::write_clip(dec = ",")
+
+# l <- cor.test(base2$inad_cartao,base2$res_2529)
+# l$p.value
+
+```
+
+
+
+```{r}
+library(glmnet)
+base2_optimal_lag <- base2 %>% select(optimal_lag$variavel)
+
+set.seed(1233)
+
+# equacao
+
+X <- model.matrix(inad_cartao ~ ., data = base2_optimal_lag)[,-1]
+
+# variavel dependente
+
+Y <- base2_optimal_lag %>% drop_na() %>% pull(inad_cartao)
+
+# Escolhentdo o hyperparametro que minimiza MSE
+
+lambda_lasso <- cv.glmnet(X,Y, alpha = 1)
+
+plot(lambda_lasso)
+```
+
+
+### Resultados
+```{r}
+l.lasso.min <- lambda_lasso$lambda.min
+lasso.model <- glmnet(X,Y,
+                      alpha  = 1, 
+                      lambda = l.lasso.min)
+
+
+u <- lasso.model$beta
+
+lasso_vars <- summary(u) %>% as_tibble()
+
+lasso_vars_final <- data.frame(var = u %>% rownames(), index = 1:nrow(u)) %>% 
+  left_join(lasso_vars, by = c("index" = "i")) %>% 
+  drop_na() %>% 
+  mutate(relevancia = abs(x)/max(abs(x)))
+
+lasso_vars_final %>% clipr::write_clip(dec = ",")
+```
+
+
+```{r}
+base_pos_lasso <- base2 %>% select(date,inad_cartao,lasso_vars_final$var)
+
+base_pos_lasso %>% pivot_longer(names_to = "variavel", cols = !contains("date")) %>% 
+  ggplot(aes(x = date, y = value, color = variavel))+
+  geom_line()+
+  scale_x_date(breaks = "2 year",date_labels = "%Y-%m")+
+  theme_minimal()+
+  labs(x = "Data", y = "Valor (normalizado)")+
+  theme(legend.position = "bottom")
+
+```
+
+
+Grafico das variaveis
+
+```{r}
+base_pos_lasso %>% 
+  pivot_longer(names_to = "variavel", cols = !contains("date")) %>% 
+  ggplot(aes(x = date, y = value))+
+  geom_line(color = "#0019ff")+
+  scale_x_date(breaks = "2 year",date_labels = "%m/%y")+
+  facet_wrap(~variavel, scale = "free", ncol = 3)+
+  theme_minimal()+
+  labs(x = "Data", y = "1a Diferença")
+```
+
+
+```{r}
+library(gt)
+library(stargazer)
+## MQO - Exercicio
+reg <- glm(inad_cartao ~ ., data = base_pos_lasso %>% select(-date))
+
+summary(reg)
+
+stargazer(reg, omit.stat=c("LL","ser","f"), ci=F, single.row=TRUE)
+```
+
+## Treinando o modelos.
+
+```{r}
+library(h2o)
+library(rsample)
+
+base_split <- base_pos_lasso %>% 
+  select(-date) %>% 
+  rsample::initial_split(,prop = 4/5)
+
+h2o.init()
+
+base_train <- as.h2o(training(base_split), destination_frame = "base_train")
+base_test <- as.h2o(testing(base_split), destination_frame = "base_test")
+base_total <- as.h2o( base_pos_lasso %>% 
+  select(-date), destination_fram = "base_split")
+```
+
+```{r}
+response <- "inad_cartao"
+predictors <- colnames(base_train)
+predictors <- predictors[predictors != response] 
+```
+
+```{r}
+model <- h2o.automl(x = predictors,
+                    y = response,
+                    training_frame = base_train,
+                    validation_frame = base_test,max_models =  30)
+```
+
+Melhores algoritimos
+```{r}
+lb <- h2o.get_leaderboard(object = model, extra_columns = "ALL") %>% as.data.frame()
+
+top <- lb %>% group_by(algo) %>% 
+  summarise(menor_algo = min(rmse)) %>% 
+  left_join(lb, by = c("menor_algo" = "rmse")) %>% 
+  select(-algo.y, -menor_algo)
+
+top
+
+# salvando modelos
+
+# for(i in 1:nrow(top)) {
+# 
+#     aml1 <- h2o.getModel(top$model_id[i]) # get model object in environment
+#     h2o.saveModel(object = aml1, getwd()) # pass that model object to h2o.saveModel as an argument
+# 
+#   }
+
+```
+
+
+Deep learning
+```{r}
+#deeplearning <- h2o.getModel("DeepLearning_grid_2_AutoML_1_20241209_72528_model_4")
+deeplearning <- h2o.loadModel("DeepLearning_grid_2_AutoML_1_20241209_72528_model_4")
+
+deeplearning
+
+deeplearning_perf <- h2o.performance(deeplearning)
+
+deeplearning_pred <- h2o.predict(deeplearning, newdata = base_total)
+
+h2o.mse(deeplearning, train = TRUE, valid = TRUE, xval = FALSE)
+
+h2o.r2(deeplearning)
+
+deeplearning_pred_df <- deeplearning_pred %>% as_tibble()
+
+base_predict <- base_pos_lasso %>% 
+  mutate(predict_dl = deeplearning_pred_df$predict)
+
+``` 
+
+Gradient Boosting Machine
+```{r}
+#gbm <- h2o.getModel("GBM_grid_1_AutoML_1_20241209_72528_model_3")
+gbm <- h2o.loadModel("GBM_grid_1_AutoML_1_20241209_72528_model_3")
+
+gbm_perf <- h2o.performance(gbm)
+
+gbm_pred <- h2o.predict(gbm, newdata = base_total)
+
+h2o.mse(gbm, train = TRUE, valid = TRUE, xval = FALSE)
+
+h2o.r2(gbm)
+
+gbm_varimp <- h2o.varimp(gbm)
+
+gbm_varimp %>% clipr::write_clip(dec = ",")
+
+gbm_pred_df <- gbm_pred %>% as_tibble()
+
+base_predict <- base_predict %>% 
+  mutate(predict_gbm = gbm_pred_df$predict)
+```
+
+Random Forest
+```{r}
+#rf <- h2o.getModel("XRT_1_AutoML_1_20241209_72528")
+rf <- h2o.loadModel("XRT_1_AutoML_1_20241209_72528")
+
+rf
+
+rf_perf <- h2o.performance(rf)
+
+rf_pred <- h2o.predict(rf, newdata = base_total)
+
+h2o.mse(rf, train = TRUE, valid = TRUE, xval = FALSE)
+
+h2o.r2(rf)
+
+rf_varimp <- h2o.varimp(rf)
+
+rf_varimp %>% clipr::write_clip(dec= ",")
+
+rf_pred_df <- rf_pred %>% as_tibble()
+
+base_predict <- base_predict %>% 
+  mutate(predict_rf = rf_pred_df$predict)
+```
+
+Stacked Ensemble
+```{r}
+#stackensemble <- h2o.getModel("StackedEnsemble_AllModels_1_AutoML_1_20241209_72528")
+stackensemble <- h2o.loadModel("StackedEnsemble_AllModels_1_AutoML_1_20241209_72528")
+
+stackensemble
+
+stackensemble_perf <- h2o.performance(stackensemble)
+
+stackensemble_pred <- h2o.predict(stackensemble, newdata = base_total)
+
+h2o.mse(stackensemble, train = TRUE, valid = TRUE, xval = FALSE)
+
+h2o.r2(stackensemble)
+
+stackensemble_pred_df <- stackensemble_pred %>% as_tibble()
+
+base_predict <- base_predict %>% 
+  mutate(predict_stackensemble = stackensemble_pred_df$predict)
+```
+
+GLM
+```{r}
+
+#glm <- h2o.getModel("GLM_1_AutoML_1_20241209_72528")
+glm <- h2o.loadModel("GLM_1_AutoML_1_20241209_72528")
+
+glm
+
+glm_perf <- h2o.performance(glm)
+
+glm_pred <- h2o.predict(glm, newdata = base_total)
+
+h2o.mse(glm, train = TRUE, valid = TRUE, xval = FALSE)
+
+h2o.r2(glm)
+
+glm_pred_df <- glm_pred %>% as_tibble()
+
+base_predict <- base_predict %>% 
+  mutate(predict_glm = glm_pred_df$predict)
+
+glm_varimp <- h2o.varimp(glm)
+
+glm_varimp %>% clipr::write_clip(dec = ",")
+
+
+glm@model$coefficients_table$p_value
+```
+
+
+
+```{r}
+glm2 <- h2o.glm(family = "gaussian",
+                        x = predictors,
+                        y = response,
+                        training_frame = base_train,
+                        validation_frame = base_test,
+                        lambda = 0.0181,
+                        compute_p_values = TRUE,
+                        generate_scoring_history = TRUE, nfolds = 5,link = "identity")
+
+
+glm2@model$coefficients_table %>% clipr::write_clip(dec= ",")
+```
+
+Predict
+
+```{r}
+base_predict %>% 
+  select(date, inad_cartao,contains("predict")) %>%
+  pivot_longer(names_to = "variavel", cols = !contains("date")) %>% 
+  #mutate(value = value - 1) %>% 
+  ggplot(aes(x = date, y = value, color = variavel, linetype = variavel))+
+  geom_line(size = 0.8)+
+  scale_x_date(breaks = "2 year",date_labels = "%m/%y")+
+  scale_color_manual(values = c("#0019ff","red","green", "grey", 
+                                "purple","pink","yellow"))+
+  scale_linetype_manual(values = c("solid","longdash","longdash","longdash","longdash","longdash"))+
+  theme_minimal()+
+  labs(x = "Data", y = "Valor (1a diferença)")+
+  theme(legend.position = c(0.1,0.27),
+        axis.text = element_text(size = 15))
+```
+
+
+
+```{r}
+cor_lag <- clipr::read_clip_tbl()
+
+cor_lag %>% 
+  mutate(inad_cartao = as.numeric(str_replace(inad_cartao, "[,]", "."))) %>% 
+  ggplot(aes(x = Lag, y = inad_cartao))+
+  geom_smooth(size = 1, color = "#0019ff",se = F)+
+  facet_wrap(~variavel, scales = "free", ncol = 5)+
+  geom_hline(yintercept = 0, color = "black", size = 1)+
+  scale_y_continuous(name = "Correlação", n.breaks = 3)+
+  scale_x_continuous(name = "Defasagem",breaks = seq(0,12,4))+
+  theme_minimal()+
+  theme(axis.text = element_text(size = 10),
+        strip.text = element_text(size = 10,face = "bold",hjust = 0))
+```
+
+
+qtd cartao de crédito
+
+```{r}
+cartoes <- get_series(list("qtd_cartoes" = 25147))
+
+cartoes_atv <- get_series(list("qtd_ativos" = 25149))
+
+tx_media_cc <- get_series(list("tx_md_cc" = 25479))
+```
+
+
+
+```{r}
+cartoes |> 
+  left_join(cartoes_atv) |> 
+  left_join(tx_media_cc) |> 
+  pivot_longer(-date) |> 
+  drop_na() |> 
+  ggplot(aes(x= date, y = value))+
+  geom_line(color = "#0019ff")+
+  facet_wrap(~name,scales = "free", ncol = 1)+
+  labs(x = "Ano", y = "Valor")+
+  theme_minimal()
+```
+
+
+
+
+
+
