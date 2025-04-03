@@ -1,0 +1,681 @@
+---
+title: "Projeto mestrado 2"
+output: html_notebook
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r}
+# pacotes
+library(tidymodels)
+library(glmnet)
+library(tidyverse)
+library(rbcb)
+library(quantmod)
+library(bestNormalize)
+library(gghighlight)
+library(corrplot)
+
+```
+
+
+## Indicadores escolhidos
+
+```{r}
+
+# inadimplencia geral pessoa fisica
+inad_mercado <- get_series(list("inad_mercado" = 21084))
+
+# inadimplência cartão de crédito pessoa física
+inad_cartao <- get_series(list("inad_cartao" = 21129))
+
+
+# variacao mensal da taxa de inadimplência de cartao de crédito 
+inad_cartao_var <- inad_cartao %>% mutate(inad_cartao = inad_cartao - lag(inad_cartao))
+# inad_cartao_var <- inad_cartao %>% mutate(inad_cartao = inad_cartao/lag(inad_cartao,12)-1)
+
+# PIB MENSAL
+pib_mensal <- get_series(list("pib_mensal" = 4380))
+
+# Variacao mensal do pib 
+pib_mensal_var <- pib_mensal %>% mutate(pib_mensal = pib_mensal - lag(pib_mensal))
+# pib_mensal_var <- pib_mensal %>% mutate(pib_mensal = pib_mensal/lag(pib_mensal,12)-1)
+
+# Índice nacional de construção civil (INCC)
+incc_di <- read.csv2("C:/Users/nabil/Documents/Mestrado/Catolica/0. Dissertação/1. Base de dados/INCC-DI.csv")
+names(incc_di) <- c("data","incc_di")
+
+incc_di <- incc_di %>% select(data,incc_di) %>% 
+  mutate(data = as.Date(paste0(data,".01"),format = "%Y.%m.%d"))
+
+
+# Variacao mensal do INCC
+
+incc_di_var <-  incc_di %>% mutate(incc_di = incc_di - lag(incc_di))
+# incc_di_var <-  incc_di %>% mutate(incc_di = incc_di / lag(incc_di,12) - 1)
+
+# Requerentes de Seguro-Desemprego
+# seguro_desemprego <- openxlsx::read.xlsx("C:/Users/nabil/Documents/Mestrado/Catolica/0. Dissertação/1. Base de dados/3- Série Histórica do Seguro-Desemprego - 2000 a 2023 - Atualizado em 11.01.2024.xlsx",sheet = "tratada")
+# seguro_desemprego <- seguro_desemprego %>% mutate(data = as.Date(data, format = "%Y/%m/%d"))
+
+# Taxa de desemprego
+PME <- read.csv2("C:/Users/nabil/Documents/Mestrado/Catolica/0. Dissertação/1. Base de dados/taxa_desemprego_pme.csv")
+PME <- PME %>% mutate(data = as.Date(data, format = "%d/%m/%Y"))
+
+PNADC <- read.csv2("C:/Users/nabil/Documents/Mestrado/Catolica/0. Dissertação/1. Base de dados/taxa_desemprego_pnad.csv")
+PNADC <- PNADC %>% mutate(data = as.Date(data, format = "%d/%m/%Y"))
+taxa_desemprego <- rbind(PME %>% filter(data < min(PNADC$data)),PNADC)
+rm(PME)
+rm(PNADC)
+
+# Variacao mensal da taxa de desemprego
+
+taxa_desemprego_var <- taxa_desemprego %>% mutate(tx_desemprego = tx_desemprego - lag(tx_desemprego))
+# taxa_desemprego_var <- taxa_desemprego %>% mutate(tx_desemprego = tx_desemprego / lag(tx_desemprego,12)-1)
+
+# Índice de confiança do consumidor (ICC)
+# icc <-  read.csv2("C:/Users/nabil/Documents/Mestrado/Catolica/0. Dissertação/1. Base de dados/ICC com ajuste sazonal.csv")
+# icc <- icc %>% mutate(data = as.Date(Data, format = "%d/%m/%Y")) %>% select(-Data)
+
+
+# Crise financeira
+
+crise_fin <- data.frame(date = pib_mensal$date,
+                        crise_fin = ifelse(floor_date(pib_mensal$date,"year") %in%
+                                             c("2007-01-01","2008-01-01","2015-01-01","2016-01-01","2020-01-01"),1,0))
+
+# Taxa de juros selic
+
+selic <- get_series(list("selic_mensal" = 4390))
+
+selic_var <- selic %>% mutate(selic_mensal = selic_mensal - lag(selic_mensal))
+# selic_var <- selic %>% mutate(selic_mensal = selic_mensal / lag(selic_mensal,12) - 1)
+
+# Inflação
+
+ipca <- openxlsx::read.xlsx("C:/Users/nabil/Documents/Mestrado/Catolica/0. Dissertação/1. Base de dados/ipca_mensal.xlsx", sheet = 1) %>% mutate(data = as.Date(data, origin = "1899-12-30"))
+
+
+ipca_var <- ipca %>% mutate(ipca_mensal = ipca_mensal - lag(ipca_mensal))
+# 
+# ipca_var <- ipca %>% mutate(ipca_mensal = ipca_mensal / lag(ipca_mensal,12) - 1)
+
+# Cambio
+
+cambio_dolar <- get_series(list("cambio_dolar" = 3697))
+
+cambio_dolar_var <- cambio_dolar %>% mutate(cambio_dolar = cambio_dolar - lag(cambio_dolar))
+# cambio_dolar_var <- cambio_dolar %>% mutate(cambio_dolar = cambio_dolar / lag(cambio_dolar,12) - 1)
+
+# Divida publica
+
+estoquedpf <- openxlsx::read.xlsx("C:/Users/nabil/Documents/Mestrado/Catolica/0. Dissertação/1. Base de dados/estoque divida publica federal.xlsx", sheet = 2) %>% mutate(data = as.Date(data, origin = "1899-12-30"))
+
+estoquedpf_var <- estoquedpf %>% mutate(divida_publica = divida_publica - lag(divida_publica))
+# estoquedpf_var <- estoquedpf %>% mutate(divida_publica = divida_publica / lag(divida_publica,12) - 1)
+
+# Resolução de limitação do rotativo
+
+res_4549 <- data.frame(date = pib_mensal$date,
+                        res_2529 = ifelse(pib_mensal$date > "2017-01-01",1,0))
+
+```
+
+## Grafico Inad
+
+```{r}
+
+crise <- as.Date(c("2014-01-01","2020-01-01"))
+
+inad_mercado %>% 
+  left_join(inad_cartao) %>% 
+  drop_na() %>% 
+  pivot_longer(names_to = "variavel", cols = !contains("date")) %>% 
+  mutate(value = value/100) %>% 
+  ggplot(aes(x = date, y = value, color = variavel))+
+  geom_line(size = 1)+
+  geom_vline(xintercept = crise,linetype = 2, size = 1)+
+  scale_x_date(breaks = "2 year",date_labels = "%m/%y")+
+  scale_y_continuous(labels = scales::percent_format(accuracy = 0.01))+
+  scale_color_manual(values = c("#0019ff","purple"))+
+  labs(x = "Data", y = "Taxa de Inadimplência")+
+  theme_minimal()+
+  theme(legend.position = "bottom")
+```
+
+## Grafico Inad
+
+```{r}
+
+crise <- as.Date(c("2014-01-01","2020-01-01"))
+
+inad_cartao %>% 
+  left_join(pib_mensal) %>% 
+  drop_na() %>%
+  mutate(inad_cartao = rnorm(inad_cartao),
+         pib_mensal = rnorm(pib_mensal)) %>% 
+  pivot_longer(names_to = "variavel", cols = !contains("date")) %>% 
+  mutate(value = value/100) %>% 
+  ggplot(aes(x = date, y = value))+
+  geom_line(size = 1)+
+  geom_vline(xintercept = crise,linetype = 2, size = 1)+
+  scale_x_date(breaks = "2 year",date_labels = "%m/%y")+
+  scale_y_continuous(labels = scales::percent_format(accuracy = 0.01))+
+  scale_color_manual(values = c("#0019ff","purple"))+
+  labs(x = "Data", y = "Taxa de Inadimplência")+
+  theme_minimal()+
+  theme(legend.position = "bottom")+
+  facet_wrap(~variavel, scales = "free", ncol = 1)
+```
+
+
+## Base
+
+```{r}
+base <- inad_cartao_var %>% 
+  left_join(incc_di_var, by = c("date" = "data")) %>% # varicacao
+  left_join(taxa_desemprego_var, by = c("date" = "data")) %>% # nao
+  left_join(pib_mensal_var) %>% # nao
+  left_join(crise_fin) %>% # dummy
+  left_join(selic_var) %>% # variacao
+  left_join(ipca_var, by = c("date" = "data")) %>% # varicao
+  left_join(cambio_dolar_var) %>% # nao
+  left_join(estoquedpf_var, by = c("date" = "data")) %>% # nao
+  left_join(res_4549) %>% # dummy
+  janitor::clean_names() %>% 
+  filter(date < "2024-01-01") %>% 
+  drop_na()
+```
+
+
+
+```{r}
+base <- base %>% 
+  mutate(incc_di_lag1 = lag(incc_di,1),
+         incc_di_lag2 = lag(incc_di,2),
+         incc_di_lag3 = lag(incc_di,3),
+         incc_di_lag4 = lag(incc_di,4),
+         incc_di_lag5 = lag(incc_di,5),
+         incc_di_lag6 = lag(incc_di,6),
+         incc_di_lag7 = lag(incc_di,7),
+         incc_di_lag8 = lag(incc_di,8),
+         incc_di_lag9 = lag(incc_di,9),
+         incc_di_lag10 = lag(incc_di,10),
+         incc_di_lag11 = lag(incc_di,11),
+         incc_di_lag12 = lag(incc_di,12),
+         #
+         tx_desemprego_lag1 = lag(tx_desemprego,1),
+         tx_desemprego_lag2 = lag(tx_desemprego,2),
+         tx_desemprego_lag3 = lag(tx_desemprego,3),
+         tx_desemprego_lag4 = lag(tx_desemprego,4),
+         tx_desemprego_lag5 = lag(tx_desemprego,5),
+         tx_desemprego_lag6 = lag(tx_desemprego,6),
+         tx_desemprego_lag7 = lag(tx_desemprego,7),
+         tx_desemprego_lag8 = lag(tx_desemprego,8),
+         tx_desemprego_lag9 = lag(tx_desemprego,9),
+         tx_desemprego_lag10 = lag(tx_desemprego,10),
+         tx_desemprego_lag11 = lag(tx_desemprego,11),
+         tx_desemprego_lag12 = lag(tx_desemprego,12),
+         #
+         pib_mensal_lag1 = lag(pib_mensal,1),
+         pib_mensal_lag2 = lag(pib_mensal,2),
+         pib_mensal_lag3 = lag(pib_mensal,3),
+         pib_mensal_lag4 = lag(pib_mensal,4),
+         pib_mensal_lag5 = lag(pib_mensal,5),
+         pib_mensal_lag6 = lag(pib_mensal,6),
+         pib_mensal_lag7 = lag(pib_mensal,7),
+         pib_mensal_lag8 = lag(pib_mensal,8),
+         pib_mensal_lag9 = lag(pib_mensal,9),
+         pib_mensal_lag10 = lag(pib_mensal,10),
+         pib_mensal_lag11 = lag(pib_mensal,11),
+         pib_mensal_lag12 = lag(pib_mensal,12),
+         #
+         selic_mensal_lag1 = lag(selic_mensal,1),
+         selic_mensal_lag2 = lag(selic_mensal,2),
+         selic_mensal_lag3 = lag(selic_mensal,3),
+         selic_mensal_lag4 = lag(selic_mensal,4),
+         selic_mensal_lag5 = lag(selic_mensal,5),
+         selic_mensal_lag6 = lag(selic_mensal,6),
+         selic_mensal_lag7 = lag(selic_mensal,7),
+         selic_mensal_lag8 = lag(selic_mensal,8),
+         selic_mensal_lag9 = lag(selic_mensal,9),
+         selic_mensal_lag10 = lag(selic_mensal,10),
+         selic_mensal_lag11 = lag(selic_mensal,11),
+         selic_mensal_lag12 = lag(selic_mensal,12),
+         #
+         ipca_mensal_lag1 = lag(ipca_mensal,1),
+         ipca_mensal_lag2 = lag(ipca_mensal,2),
+         ipca_mensal_lag3 = lag(ipca_mensal,3),
+         ipca_mensal_lag4 = lag(ipca_mensal,4),
+         ipca_mensal_lag5 = lag(ipca_mensal,5),
+         ipca_mensal_lag6 = lag(ipca_mensal,6),
+         ipca_mensal_lag7 = lag(ipca_mensal,7),
+         ipca_mensal_lag8 = lag(ipca_mensal,8),
+         ipca_mensal_lag9 = lag(ipca_mensal,9),
+         ipca_mensal_lag10 = lag(ipca_mensal,10),
+         ipca_mensal_lag11 = lag(ipca_mensal,11),
+         ipca_mensal_lag12 = lag(ipca_mensal,12),
+         #
+         cambio_dolar_lag1 = lag(cambio_dolar,1),
+         cambio_dolar_lag2 = lag(cambio_dolar,2),
+         cambio_dolar_lag3 = lag(cambio_dolar,3),
+         cambio_dolar_lag4 = lag(cambio_dolar,4),
+         cambio_dolar_lag5 = lag(cambio_dolar,5),
+         cambio_dolar_lag6 = lag(cambio_dolar,6),
+         cambio_dolar_lag7 = lag(cambio_dolar,7),
+         cambio_dolar_lag8 = lag(cambio_dolar,8),
+         cambio_dolar_lag9 = lag(cambio_dolar,9),
+         cambio_dolar_lag10 = lag(cambio_dolar,10),
+         cambio_dolar_lag11 = lag(cambio_dolar,11),
+         cambio_dolar_lag12 = lag(cambio_dolar,12),
+         #
+         divida_publica_lag1 = lag(divida_publica,1),
+         divida_publica_lag2 = lag(divida_publica,2),
+         divida_publica_lag3 = lag(divida_publica,3),
+         divida_publica_lag4 = lag(divida_publica,4),
+         divida_publica_lag5 = lag(divida_publica,5),
+         divida_publica_lag6 = lag(divida_publica,6),
+         divida_publica_lag7 = lag(divida_publica,7),
+         divida_publica_lag8 = lag(divida_publica,8),
+         divida_publica_lag9 = lag(divida_publica,9),
+         divida_publica_lag10 = lag(divida_publica,10),
+         divida_publica_lag11 = lag(divida_publica,11),
+         divida_publica_lag12 = lag(divida_publica,12)
+  )
+         
+```
+
+
+## Normalizando os lags
+```{r}
+library(bestNormalize)
+best_norm <- function(col) { # create a function with the name my_function
+  bestNormalize::bestNormalize(col)[[1]]
+}
+
+base2 <- base %>% 
+  mutate_at(.vars = base %>% 
+              select(contains("lag")) %>%
+              variable.names(),
+            best_norm)
+```
+
+
+## Substituindo os valores por variações anuais
+
+```{r}
+yoy <- function(col){
+  case_when(col/lag(col,12) == "Inf"~1,
+            col/lag(col,12) == "-Inf" ~ -1,
+            TRUE ~ col/lag(col,12))
+}
+
+base2 <- base2 %>% 
+  mutate_at(.vars = base %>% 
+              select(-date,-crise_fin,-res_2529) %>%
+              variable.names(),
+            yoy)
+
+base2 <- base2 %>% drop_na()
+
+#saveRDS(base2,"base2_mestrado.RDS")
+```
+
+
+## Tabela de correlação
+
+```{r}
+library(corrplot)
+correlacao <- stats::cor(base %>% select(-date) %>% drop_na(), use = "all.obs")
+
+correlacao <- data.frame(coredata(correlacao)) %>% rownames_to_column("variavel") %>% 
+  mutate(cor_absoluta = abs(inad_cartao))
+
+
+correlacao %>% arrange(desc(cor_absoluta)) %>% 
+  select(-cor_absoluta) %>% clipr::write_clip(dec = ",")
+```
+
+
+## Grafico 1
+```{r}
+library(gghighlight)
+
+base %>% select(date,!contains("lag"), -pib_mensal,-divida_publica, -incc_di, -crise_fin, -res_2529) %>% drop_na() %>% 
+  pivot_longer(names_to = "variavel", cols = !contains("date")) %>% 
+  ggplot(aes(x = date, y = value, color = variavel))+
+  geom_line(color = "#0019ff", linewidth = 1)+
+  scale_x_date(breaks = "2 year",date_labels = "%Y-%m")+
+  gghighlight(variavel == "inad_cartao", label_key = variavel,use_group_by = F,use_direct_label = F,
+              unhighlighted_params = list(linewidth = 0.5, colour = alpha("grey", 1)))+
+  theme_minimal()+
+  labs(x = "Data", y = "%YoY")+
+  theme(axis.text.y = element_text(size = 10))
+```
+
+
+## Grafico 2
+```{r}
+library(gghighlight)
+
+base2 %>% select(date,!contains("lag"),-crise_fin, -res_2529) %>% pivot_longer(names_to = "variavel", cols = !contains("date")) %>%
+  ggplot(aes(x = date, y = value))+
+  geom_line(color = "#0019ff", linewidth = 0.5)+
+  scale_x_date(breaks = "3 year",date_labels = "%m/%y")+
+  geom_vline(xintercept = crise,linetype = 2, size = 0.5)+
+  labs(x = "Data", y = "Valor (1a diferença)" )+
+  facet_wrap(~variavel, scales = "free", ncol = 3)+
+  theme_minimal()
+```
+
+
+## Lasso Regression with optimal lag
+
+```{r}
+
+# optimal lag
+
+max_cor <- correlacao %>% 
+  select(-cor_absoluta) %>% 
+  mutate(var_sub = str_remove_all(variavel, "_lag[1-9][0-9]*")) %>% 
+  group_by(var_sub) %>% 
+  summarise(max_cor = max(abs(inad_cartao)))
+
+
+optimal_lag <- correlacao %>% 
+  select(-cor_absoluta) %>% 
+  mutate(var_sub = str_remove_all(variavel, "_lag[1-9][0-9]*"),
+         max_cor = abs(inad_cartao)) %>%
+  inner_join(max_cor, by = c("var_sub","max_cor"))
+
+
+library(glmnet)
+base2_optimal_lag <- base %>% select(optimal_lag$variavel)
+
+set.seed(1233)
+
+optimal_lag %>% clipr::write_clip(dec = ',')
+
+# equacao
+
+X <- model.matrix(inad_cartao ~ ., data = base2_optimal_lag %>% drop_na())[,-1]
+
+# variavel dependente
+
+Y <- base2_optimal_lag %>% drop_na() %>% pull(inad_cartao)
+
+# Escolhentdo o hyperparametro que minimiza MSE
+
+lambda_lasso <- cv.glmnet(X,Y, alpha = 1)
+
+plot(lambda_lasso)
+```
+
+```{r}
+lambda_lasso
+```
+
+### Resultados
+```{r}
+l.lasso.min <- lambda_lasso$lambda.min
+lasso.model <- glmnet(X,Y,
+                      alpha  = 1, 
+                      lambda = l.lasso.min)
+
+
+u <- lasso.model$beta
+
+lasso_vars <- summary(u) %>% as_tibble()
+
+lasso_vars_final <- data.frame(var = u %>% rownames(), index = 1:nrow(u)) %>% 
+  left_join(lasso_vars, by = c("index" = "i")) %>% 
+  drop_na() %>% 
+  mutate(relevancia = abs(x)/max(abs(x))) # %>% filter(relevancia > 0.01)
+
+lasso_vars_final %>% clipr::write_clip(dec = ",")
+```
+
+
+```{r}
+base_pos_lasso <- base %>% select(date,inad_cartao,lasso_vars_final$var) %>% 
+  drop_na()
+
+base_pos_lasso %>% pivot_longer(names_to = "variavel", cols = !contains("date")) %>% 
+  ggplot(aes(x = date, y = value, color = variavel))+
+  geom_line()+
+  scale_x_date(breaks = "2 year",date_labels = "%Y-%m")+
+  theme_minimal()+
+  labs(x = "Data", y = "Valor (normalizado)")+
+  theme(legend.position = "bottom")
+
+```
+
+
+```{r}
+library(gt)
+library(stargazer)
+## MQO - Exercicio
+reg <- lm(inad_cartao ~ ., data = base_pos_lasso %>% select(-date))
+
+summary(reg)
+
+stargazer(reg, omit.stat=c("LL","ser","f"), ci=F, single.row=TRUE)
+```
+
+
+## Treinando o modelos.
+
+```{r}
+library(h2o)
+library(rsample)
+
+base_split <- base_pos_lasso %>% 
+  select(-date) %>% 
+  rsample::initial_split(,prop = 4/5)
+
+h2o.init()
+
+base_train <- as.h2o(training(base_split), destination_frame = "base_train")
+base_test <- as.h2o(testing(base_split), destination_frame = "base_test")
+base_total <- as.h2o( base_pos_lasso %>% 
+  select(-date), destination_fram = "base_split")
+```
+
+
+```{r}
+response <- "inad_cartao"
+predictors <- colnames(base_train)
+predictors <- predictors[predictors != response] 
+```
+
+
+```{r}
+model <- h2o.automl(x = predictors,
+                    y = response,
+                    training_frame = base_train,
+                    validation_frame = base_test)
+```
+
+
+Melhores algoritimos
+```{r}
+lb <- h2o.get_leaderboard(object = model, extra_columns = "ALL") %>% as.data.frame()
+
+top <- lb %>% group_by(algo) %>% 
+  summarise(menor_algo = min(rmse)) %>% 
+  left_join(lb, by = c("menor_algo" = "rmse")) %>% 
+  select(-algo.y, -menor_algo)
+
+top %>% View()
+
+# salvando modelos
+
+# for(i in 1:nrow(top)) {
+# 
+#     aml1 <- h2o.getModel(top$model_id[i]) # get model object in environment
+#     h2o.saveModel(object = aml1, getwd()) # pass that model object to h2o.saveModel as an argument
+# 
+#   }
+
+```
+
+
+Deep learning
+```{r}
+deeplearning <- h2o.getModel("DeepLearning_grid_1_AutoML_1_20241201_80057_model_125")
+#deeplearning <- h2o.loadModel("modelos machine learning/DeepLearning_grid_2_AutoML_2_20240717_202601_model_23")
+
+deeplearning
+
+deeplearning_perf <- h2o.performance(deeplearning)
+
+deeplearning_pred <- h2o.predict(deeplearning, newdata = base_total)
+
+h2o.mse(deeplearning, train = TRUE, valid = TRUE, xval = FALSE)
+
+h2o.r2(deeplearning)
+
+deeplearning_pred_df <- deeplearning_pred %>% as_tibble()
+
+base_predict <- base_pos_lasso %>% 
+  mutate(predict_dl = deeplearning_pred_df$predict)
+```
+
+
+Gradient Boosting Machine
+```{r}
+gbm <- h2o.getModel("GBM_grid_1_AutoML_1_20241201_80057_model_8")
+
+gbm_perf <- h2o.performance(gbm)
+
+gbm_pred <- h2o.predict(gbm, newdata = base_total)
+
+h2o.mse(gbm, train = TRUE, valid = TRUE, xval = FALSE)
+
+h2o.r2(gbm)
+
+gbm_varimp <- h2o.varimp(gbm)
+
+gbm_varimp %>% clipr::write_clip(dec = ",")
+
+gbm_pred_df <- gbm_pred %>% as_tibble()
+
+base_predict <- base_predict %>% 
+  mutate(predict_gbm = gbm_pred_df$predict)
+```
+
+
+Random Forest
+```{r}
+rf <- h2o.getModel("XRT_1_AutoML_1_20241201_80057")
+
+rf
+
+rf_perf <- h2o.performance(rf)
+
+rf_pred <- h2o.predict(rf, newdata = base_total)
+
+h2o.mse(rf, train = TRUE, valid = TRUE, xval = FALSE)
+
+h2o.r2(rf)
+
+rf_varimp <- h2o.varimp(rf)
+
+rf_varimp %>% clipr::write_clip(dec= ",")
+
+rf_pred_df <- rf_pred %>% as_tibble()
+
+base_predict <- base_predict %>% 
+  mutate(predict_rf = rf_pred_df$predict)
+```
+
+
+Stacked Ensemble
+```{r}
+stackensemble <- h2o.getModel("StackedEnsemble_BestOfFamily_5_AutoML_1_20241201_80057")
+
+stackensemble
+
+stackensemble_perf <- h2o.performance(stackensemble)
+
+stackensemble_pred <- h2o.predict(stackensemble, newdata = base_total)
+
+h2o.mse(stackensemble, train = TRUE, valid = TRUE, xval = FALSE)
+
+h2o.r2(stackensemble)
+
+stackensemble_pred_df <- stackensemble_pred %>% as_tibble()
+
+base_predict <- base_predict %>% 
+  mutate(predict_stackensemble = stackensemble_pred_df$predict)
+
+
+```
+
+
+GLM
+```{r}
+
+glm <- h2o.getModel("GLM_1_AutoML_1_20241201_80057")
+
+glm
+
+glm_perf <- h2o.performance(glm)
+
+glm_pred <- h2o.predict(glm, newdata = base_total)
+
+h2o.mse(glm, train = TRUE, valid = TRUE, xval = FALSE)
+
+h2o.r2(glm)
+
+glm_pred_df <- glm_pred %>% as_tibble()
+
+base_predict <- base_predict %>% 
+  mutate(predict_glm = glm_pred_df$predict)
+
+glm_varimp <- h2o.varimp(glm)
+
+glm_varimp %>% clipr::write_clip(dec = ",")
+
+
+glm@model$coefficients_table$p_value
+```
+
+
+```{r}
+glm2 <- h2o.glm(family = "gaussian",
+                        x = predictors,
+                        y = response,
+                        training_frame = base_train,
+                        validation_frame = base_test,
+                        lambda = 0.0181,
+                        compute_p_values = TRUE,
+                        generate_scoring_history = TRUE, nfolds = 5,link = "identity")
+
+
+glm2@model$coefficients_table %>% clipr::write_clip(dec= ",")
+```
+
+
+Predict
+
+```{r}
+base_predict %>% 
+  select(date, inad_cartao,contains("predict")) %>%
+  pivot_longer(names_to = "variavel", cols = !contains("date")) %>% 
+  #mutate(value = value - 1) %>% 
+  ggplot(aes(x = date, y = value, color = variavel, linetype = variavel))+
+  geom_line(size = 0.8)+
+  scale_x_date(breaks = "2 year",date_labels = "%m/%y")+
+  scale_color_manual(values = c("#0019ff","red","green", "grey", 
+                                "purple","pink","yellow"))+
+  scale_linetype_manual(values = c("solid","longdash","longdash","longdash","longdash","longdash"))+
+  theme_minimal()+
+  labs(x = "Data", y = "Valor (1a diferença)")+
+  theme(legend.position = c(0.1,0.80),
+        axis.text = element_text(size = 15))
+```
+
+
+
+

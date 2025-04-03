@@ -1,0 +1,889 @@
+---
+title: "Projeto mestrado"
+output: html_notebook
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r}
+# pacotes
+library(tidymodels)
+library(glmnet)
+library(tidyverse)
+library(rbcb)
+library(quantmod)
+library(bestNormalize)
+library(gghighlight)
+library(corrplot)
+
+```
+
+# 1. Parte - Identificar os indicadores macroeconômicos de maior correlação com inadimplência no cartão de crédito
+
+## Indicadores macroeconômicos com base no artigo.
+
+```{r}
+library(tidyverse)
+text_tbl <- data.frame(
+  Indicador_artigo = c(
+    "Loss Rate",
+    "Building Permits",
+    "Housing Starts",
+    "Initial Unemployment Insurance Claims",
+    "Unemployment Rate",
+    "Consumer Confidence Index",
+    "University of Michigan Sentiment Index",
+    "S&P 500 Index",
+    "Dow Jones Industrial Average",
+    "Total Credit Utilization",
+    "Revolving Credit Utilization",
+    "Non Revolving Credit Utilization",
+    "Industrial Production Index",
+    "ISM Manufacturing New Orders", 
+    "ISM Purchasing Managers Index", 
+    "Weekly Hours Worked by Manufacturing Workers", 
+    "M1", 
+    "M2", 
+    "Yield (10 years minus 3 month)", 
+    "Yield (10 years minus Federal Fund Rate)",
+    "-",
+    "-",
+    "-",
+    "-"
+  ),
+Indicador_adaptado = c(
+  "Taxa de inadimplência - Cartão de crédito - PF",
+  "FBCF - construção civil",#sim
+  "Índice nacional de construção civil (INCC)",#sim
+  "Requerentes de Seguro-Desemprego",#sim
+  "Taxa de desemprego", #sim
+  "Índice de confiança do consumidor (ICC)",#sim
+  "expecatativa ipca consumidor", #sim
+  "Índice B3",#sim
+  "Índice Brasil 100", #sim
+  "Concessões - Total (Crédito)", #sim
+  "Saldo - Pessoas físicas (Crédito)", #sim
+  "-",
+  "Pesquisa Industrial Mensal - Produção Física (PIM-PF)", #sim
+  "-",
+  "-",
+  "Horas trabalhadas na produção", #sim
+  "Papel moeda em circulação (saldo em final de período)", #sim
+  "Reservas bancárias (saldo em final de período)", #sim
+  "Dívida mobiliária federal (saldos) - Título indexado ao IPC-A", #sim
+  "Dívida mobiliária federal (saldos) - Título indexado a Selic - LFT", #sim
+  "Índice de Atividade Econômica do Banco Central (IBC-Br)",
+  "PIB mensal - valores correntes",
+  "Crise Financeira",
+  "Resolução n.4549/2017"
+),
+Fonte = c(
+  "BACEN",
+  "Ipea",
+  "FGV",
+  "MT-PDET",
+  "IBGE (PNADC e PME)",
+  "FGV",
+  "FGV",
+  "B3",
+  "B3",
+  "BACEN",
+  "BACEN",
+  "-",
+  "IBGE",
+  "-",
+  "-",
+  "CNI",
+  "BACEN",
+  "BACEN",
+  "BACEN",
+  "BACEN",
+  "BACEN",
+  "BACEN",
+  "-",
+  "-"
+),
+Periodo = c(
+  "Mensal - Desde 2011",
+  "Mensal - Desde 1996",
+  "Mensal - Desde 1944",
+  "Mensal - 2000 a 2023",
+  "Mensal - Desde 2002",
+  "Mensal - Desde 2005",
+  "Mensal- Desde 1967",
+  "Mensal - Desde 1998",
+  "Mensal - Desde 1998",
+  "Mensal - Desde 2011",
+  "Mensal - Desde 2011",
+  "-",
+  "Mensal - Desde 1998",
+  "-",
+  "-",
+  "Mensal - Desde 2003",
+  "Mensal - Desde 1980",
+  "Mensal - Desde 1980",
+  "Mensal - Desde 2005",
+  "Mensal - Desde 2005",
+  "Mensal - Desde 2003",
+  "Mensal - Desde 1990",
+  "Mensal - Desde 2011",
+  "Mensal - Desde 2011"
+  
+)
+)
+
+text_tbl
+```
+
+
+## Puxando os valores de inadimplência de cartão de crédito.
+
+inadimplência cartão de crédito pessoa física
+```{r}
+library(rbcb)
+inad_cartao <- get_series(list("inad_cartao" = 21129))
+```
+
+
+```{r}
+inad_cartao %>% mutate(date = as.Date(date), inad_cartao = inad_cartao/100) %>%
+  filter(date < "2024-01-01") %>%
+  ggplot() +
+  aes(x = date, y = inad_cartao) +
+  geom_line(linewidth = 1, color = "#0019ff") +
+  scale_x_date(breaks = "2 year",date_labels = "%Y-%m")+
+  scale_y_continuous(labels = scales::percent)+
+  theme_minimal() +
+  labs(x = "Data", y = "Taxa de Inadimplência", caption = "Fonte: Banco Central")+
+  theme(axis.text.y = element_text(size = 10))
+```
+
+FBCF - construção civil
+```{r}
+fbcf <- read.csv2("FBCF - construção civil.csv")
+names(fbcf) <- c("data","indicador_construcao_civil")
+
+fbcf <- fbcf %>% select(data,indicador_construcao_civil) %>% 
+  mutate(data = as.Date(paste0(data,".01"),format = "%Y.%m.%d"))
+```
+
+Índice nacional de construção civil (INCC)
+```{r}
+incc_di <- read.csv2("INCC-DI.csv")
+names(incc_di) <- c("data","incc_di")
+
+incc_di <- incc_di %>% select(data,incc_di) %>% 
+  mutate(data = as.Date(paste0(data,".01"),format = "%Y.%m.%d"))
+```
+
+Requerentes de Seguro-Desemprego
+```{r}
+seguro_desemprego <- openxlsx::read.xlsx("3- Série Histórica do Seguro-Desemprego - 2000 a 2023 - Atualizado em 11.01.2024.xlsx",sheet = "tratada")
+seguro_desemprego <- seguro_desemprego %>% mutate(data = as.Date(data, format = "%Y/%m/%d"))
+```
+
+Taxa de desemprego
+```{r}
+PME <- read.csv2("taxa_desemprego_pme.csv")
+PME <- PME %>% mutate(data = as.Date(data, format = "%d/%m/%Y"))
+
+PNADC <- read.csv2("taxa_desemprego_pnad.csv")
+PNADC <- PNADC %>% mutate(data = as.Date(data, format = "%d/%m/%Y"))
+taxa_desemprego <- rbind(PME %>% filter(data < min(PNADC$data)),PNADC)
+rm(PME)
+rm(PNADC)
+```
+
+Índice de confiança do consumidor (ICC)
+```{r}
+icc <-  read.csv2("ICC com ajuste sazonal.csv")
+
+icc <- icc %>% mutate(data = as.Date(Data, format = "%d/%m/%Y")) %>% select(-Data)
+```
+
+Sondagem do Consumidor
+```{r}
+sondagem_consumidor <- read.csv2("expecatativa ipca consumidor.csv")
+
+sondagem_consumidor <- sondagem_consumidor %>%
+  mutate(data = as.Date(Data, format = "%d/%m/%Y")) %>% select(-Data)
+```
+
+Indice bovespa 
+```{r}
+library(quantmod)
+getSymbols("^BVSP",
+           periodicity='monthly', 
+           from='2000-01-01',
+           to='2024-01-01'
+           )
+
+
+BVSP <- data.frame(data = index(BVSP),coredata(BVSP))
+BVSP <- BVSP %>% select(data,BVSP.Adjusted)
+```
+
+Indice Brasil 50
+```{r}
+getSymbols("BRAX11.SA",
+           periodicity='monthly', 
+           from='2000-01-01',
+           to='2024-01-01'
+           )
+
+BRAX11.SA <- data.frame(data = index(BRAX11.SA),coredata(BRAX11.SA))
+BRAX11.SA <- BRAX11.SA %>% select(data,BRAX11.SA.Adjusted)
+```
+
+Concessões de crédito com recursos livres - Pessoas físicas - Total
+```{r}
+concessoes_credito <- get_series(list("concessoes_credito" = 20662)) 
+```
+
+Saldo da carteira de crédito com recursos livres - Pessoas físicas - Total
+```{r}
+saldo_credito <- get_series(list("saldo_credito" = 20570))
+```
+
+Papel moeda em circulação (saldo em final de período)
+```{r}
+papel_moeda <- get_series(list("saldo_moeda" = 1786)) 
+```
+
+Reservas bancárias (saldo em final de período)
+```{r}
+reservas_bancarias <- get_series(list("saldo_reservas" = 1787)) 
+```
+
+Dívida mobiliária federal (saldos) - Posição em carteira - Título indexado a Selic - LFT
+```{r}
+divida_titulo_selic <- get_series(list("divida_LFT" = 10634)) 
+```
+
+Dívida mobiliária federal (saldos) - Posição em carteira - Título indexado ao IPC-A - NTN-B
+```{r}
+divida_titulo_ipca <- get_series(list("divida_NTNB" = 10642))
+```
+
+Índice de Atividade Econômica do Banco Central (IBC-Br)
+```{r}
+ibc_br <- get_series(list("ibc_br" = 24364))
+```
+
+PIB mensal - valores correntes
+```{r}
+pib_mensal <- get_series(list("pib_mensal" = 4380))
+```
+
+Crise Financeira
+```{r}
+#2007
+#2008
+#2015
+#2016
+#2020
+
+crise_fin <- data.frame(date = pib_mensal$date,
+                        crise_fin = ifelse(floor_date(pib_mensal$date,"year") %in%
+                                             c("2007-01-01","2008-01-01","2015-01-01","2016-01-01","2020-01-01"),1,0))
+```
+
+Resolução n.4549/2017
+```{r}
+res_4549 <- data.frame(date = pib_mensal$date,
+                        res_2529 = ifelse(pib_mensal$date > "2017-01-01",1,0))
+
+```
+
+
+## Montando a base
+```{r}
+base <- inad_cartao %>% 
+  left_join(fbcf, by = c("date" = "data")) %>% 
+  left_join(incc_di, by = c("date" = "data")) %>% 
+  left_join(seguro_desemprego,by = c("date" = "data")) %>% 
+  left_join(taxa_desemprego, by = c("date" = "data")) %>% 
+  left_join(icc, by = c("date" = "data")) %>% 
+  left_join(sondagem_consumidor, by = c("date" = "data")) %>% 
+  left_join(BVSP, by = c("date" = "data")) %>% 
+  left_join(BRAX11.SA, by = c("date" = "data")) %>% 
+  left_join(concessoes_credito) %>% 
+  left_join(saldo_credito) %>%
+  left_join(papel_moeda) %>% 
+  left_join(reservas_bancarias) %>% 
+  left_join(divida_titulo_selic) %>% 
+  left_join(divida_titulo_ipca) %>% 
+  left_join(ibc_br) %>% 
+  left_join(pib_mensal) %>% 
+  left_join(crise_fin) %>% 
+  left_join(res_4549) %>% 
+  janitor::clean_names() %>% 
+  filter(date < "2024-01-01")
+```
+
+## Criando lags
+```{r}
+base <- base %>% 
+  mutate(indicador_construcao_civil_lag1 = lag(indicador_construcao_civil,1),
+         indicador_construcao_civil_lag2 = lag(indicador_construcao_civil,2),
+         indicador_construcao_civil_lag3 = lag(indicador_construcao_civil,3),
+         indicador_construcao_civil_lag4 = lag(indicador_construcao_civil,4),
+         indicador_construcao_civil_lag5 = lag(indicador_construcao_civil,5),
+         indicador_construcao_civil_lag6 = lag(indicador_construcao_civil,6),
+         indicador_construcao_civil_lag7 = lag(indicador_construcao_civil,7),
+         indicador_construcao_civil_lag8 = lag(indicador_construcao_civil,8),
+         indicador_construcao_civil_lag9 = lag(indicador_construcao_civil,9),
+         indicador_construcao_civil_lag10 = lag(indicador_construcao_civil,10),
+         indicador_construcao_civil_lag11 = lag(indicador_construcao_civil,11),
+         indicador_construcao_civil_lag12 = lag(indicador_construcao_civil,12),
+         #
+         incc_di_lag1 = lag(incc_di,1),
+         incc_di_lag2 = lag(incc_di,2),
+         incc_di_lag3 = lag(incc_di,3),
+         incc_di_lag4 = lag(incc_di,4),
+         incc_di_lag5 = lag(incc_di,5),
+         incc_di_lag6 = lag(incc_di,6),
+         incc_di_lag7 = lag(incc_di,7),
+         incc_di_lag8 = lag(incc_di,8),
+         incc_di_lag9 = lag(incc_di,9),
+         incc_di_lag10 = lag(incc_di,10),
+         incc_di_lag11 = lag(incc_di,11),
+         incc_di_lag12 = lag(incc_di,12),
+         #
+         requerentes_seguro_desemprego_lag1 = lag(requerentes_seguro_desemprego,1),
+         requerentes_seguro_desemprego_lag2 = lag(requerentes_seguro_desemprego,2),
+         requerentes_seguro_desemprego_lag3 = lag(requerentes_seguro_desemprego,3),
+         requerentes_seguro_desemprego_lag4 = lag(requerentes_seguro_desemprego,4),
+         requerentes_seguro_desemprego_lag5 = lag(requerentes_seguro_desemprego,5),
+         requerentes_seguro_desemprego_lag6 = lag(requerentes_seguro_desemprego,6),
+         requerentes_seguro_desemprego_lag7 = lag(requerentes_seguro_desemprego,7),
+         requerentes_seguro_desemprego_lag8 = lag(requerentes_seguro_desemprego,8),
+         requerentes_seguro_desemprego_lag9 = lag(requerentes_seguro_desemprego,9),
+         requerentes_seguro_desemprego_lag10 = lag(requerentes_seguro_desemprego,10),
+         requerentes_seguro_desemprego_lag11 = lag(requerentes_seguro_desemprego,11),
+         requerentes_seguro_desemprego_lag12 = lag(requerentes_seguro_desemprego,12),
+         #
+         tx_desemprego_lag1 = lag(tx_desemprego,1),
+         tx_desemprego_lag2 = lag(tx_desemprego,2),
+         tx_desemprego_lag3 = lag(tx_desemprego,3),
+         tx_desemprego_lag4 = lag(tx_desemprego,4),
+         tx_desemprego_lag5 = lag(tx_desemprego,5),
+         tx_desemprego_lag6 = lag(tx_desemprego,6),
+         tx_desemprego_lag7 = lag(tx_desemprego,7),
+         tx_desemprego_lag8 = lag(tx_desemprego,8),
+         tx_desemprego_lag9 = lag(tx_desemprego,9),
+         tx_desemprego_lag10 = lag(tx_desemprego,10),
+         tx_desemprego_lag11 = lag(tx_desemprego,11),
+         tx_desemprego_lag12 = lag(tx_desemprego,12),
+         #
+         icc_lag1 = lag(icc,1),
+         icc_lag2 = lag(icc,2),
+         icc_lag3 = lag(icc,3),
+         icc_lag4 = lag(icc,4),
+         icc_lag5 = lag(icc,5),
+         icc_lag6 = lag(icc,6),
+         icc_lag7 = lag(icc,7),
+         icc_lag8 = lag(icc,8),
+         icc_lag9 = lag(icc,9),
+         icc_lag10 = lag(icc,10),
+         icc_lag11 = lag(icc,11),
+         icc_lag12 = lag(icc,12),
+         #
+         ipca_consumidor_lag1 = lag(ipca_consumidor,1),
+         ipca_consumidor_lag2 = lag(ipca_consumidor,2),
+         ipca_consumidor_lag3 = lag(ipca_consumidor,3),
+         ipca_consumidor_lag4 = lag(ipca_consumidor,4),
+         ipca_consumidor_lag5 = lag(ipca_consumidor,5),
+         ipca_consumidor_lag6 = lag(ipca_consumidor,6),
+         ipca_consumidor_lag7 = lag(ipca_consumidor,7),
+         ipca_consumidor_lag8 = lag(ipca_consumidor,8),
+         ipca_consumidor_lag9 = lag(ipca_consumidor,9),
+         ipca_consumidor_lag10 = lag(ipca_consumidor,10),
+         ipca_consumidor_lag11 = lag(ipca_consumidor,11),
+         ipca_consumidor_lag12 = lag(ipca_consumidor,12),
+         #
+         bvsp_adjusted_lag1 = lag(bvsp_adjusted,1),
+         bvsp_adjusted_lag2 = lag(bvsp_adjusted,2),
+         bvsp_adjusted_lag3 = lag(bvsp_adjusted,3),
+         bvsp_adjusted_lag4 = lag(bvsp_adjusted,4),
+         bvsp_adjusted_lag5 = lag(bvsp_adjusted,5),
+         bvsp_adjusted_lag6 = lag(bvsp_adjusted,6),
+         bvsp_adjusted_lag7 = lag(bvsp_adjusted,7),
+         bvsp_adjusted_lag8 = lag(bvsp_adjusted,8),
+         bvsp_adjusted_lag9 = lag(bvsp_adjusted,9),
+         bvsp_adjusted_lag10 = lag(bvsp_adjusted,10),
+         bvsp_adjusted_lag11 = lag(bvsp_adjusted,11),
+         bvsp_adjusted_lag12 = lag(bvsp_adjusted,12),
+         #
+         brax11_sa_adjusted_lag1 = lag(brax11_sa_adjusted,1),
+         brax11_sa_adjusted_lag2 = lag(brax11_sa_adjusted,2),
+         brax11_sa_adjusted_lag3 = lag(brax11_sa_adjusted,3),
+         brax11_sa_adjusted_lag4 = lag(brax11_sa_adjusted,4),
+         brax11_sa_adjusted_lag5 = lag(brax11_sa_adjusted,5),
+         brax11_sa_adjusted_lag6 = lag(brax11_sa_adjusted,6),
+         brax11_sa_adjusted_lag7 = lag(brax11_sa_adjusted,7),
+         brax11_sa_adjusted_lag8 = lag(brax11_sa_adjusted,8),
+         brax11_sa_adjusted_lag9 = lag(brax11_sa_adjusted,9),
+         brax11_sa_adjusted_lag10 = lag(brax11_sa_adjusted,10),
+         brax11_sa_adjusted_lag11 = lag(brax11_sa_adjusted,11),
+         brax11_sa_adjusted_lag12 = lag(brax11_sa_adjusted,12),
+         #
+         concessoes_credito_lag1 = lag(concessoes_credito,1),
+         concessoes_credito_lag2 = lag(concessoes_credito,2),
+         concessoes_credito_lag3 = lag(concessoes_credito,3),
+         concessoes_credito_lag4 = lag(concessoes_credito,4),
+         concessoes_credito_lag5 = lag(concessoes_credito,5),
+         concessoes_credito_lag6 = lag(concessoes_credito,6),
+         concessoes_credito_lag7 = lag(concessoes_credito,7),
+         concessoes_credito_lag8 = lag(concessoes_credito,8),
+         concessoes_credito_lag9 = lag(concessoes_credito,9),
+         concessoes_credito_lag10 = lag(concessoes_credito,10),
+         concessoes_credito_lag11 = lag(concessoes_credito,11),
+         concessoes_credito_lag12 = lag(concessoes_credito,12),
+         #
+         saldo_credito_lag1 = lag(saldo_credito,1),
+         saldo_credito_lag2 = lag(saldo_credito,2),
+         saldo_credito_lag3 = lag(saldo_credito,3),
+         saldo_credito_lag4 = lag(saldo_credito,4),
+         saldo_credito_lag5 = lag(saldo_credito,5),
+         saldo_credito_lag6 = lag(saldo_credito,6),
+         saldo_credito_lag7 = lag(saldo_credito,7),
+         saldo_credito_lag8 = lag(saldo_credito,8),
+         saldo_credito_lag9 = lag(saldo_credito,9),
+         saldo_credito_lag10 = lag(saldo_credito,10),
+         saldo_credito_lag11 = lag(saldo_credito,11),
+         saldo_credito_lag12 = lag(saldo_credito,12),
+         #
+         saldo_moeda_lag1 = lag(saldo_moeda,1),
+         saldo_moeda_lag2 = lag(saldo_moeda,2),
+         saldo_moeda_lag3 = lag(saldo_moeda,3),
+         saldo_moeda_lag4 = lag(saldo_moeda,4),
+         saldo_moeda_lag5 = lag(saldo_moeda,5),
+         saldo_moeda_lag6 = lag(saldo_moeda,6),
+         saldo_moeda_lag7 = lag(saldo_moeda,7),
+         saldo_moeda_lag8 = lag(saldo_moeda,8),
+         saldo_moeda_lag9 = lag(saldo_moeda,9),
+         saldo_moeda_lag10 = lag(saldo_moeda,10),
+         saldo_moeda_lag11 = lag(saldo_moeda,11),
+         saldo_moeda_lag12 = lag(saldo_moeda,12),
+         #
+         saldo_reservas_lag1 = lag(saldo_reservas,1),
+         saldo_reservas_lag2 = lag(saldo_reservas,2),
+         saldo_reservas_lag3 = lag(saldo_reservas,3),
+         saldo_reservas_lag4 = lag(saldo_reservas,4),
+         saldo_reservas_lag5 = lag(saldo_reservas,5),
+         saldo_reservas_lag6 = lag(saldo_reservas,6),
+         saldo_reservas_lag7 = lag(saldo_reservas,7),
+         saldo_reservas_lag8 = lag(saldo_reservas,8),
+         saldo_reservas_lag9 = lag(saldo_reservas,9),
+         saldo_reservas_lag10 = lag(saldo_reservas,10),
+         saldo_reservas_lag11 = lag(saldo_reservas,11),
+         saldo_reservas_lag12 = lag(saldo_reservas,12),
+         #
+         divida_lft_lag1 = lag(divida_lft,1),
+         divida_lft_lag2 = lag(divida_lft,2),
+         divida_lft_lag3 = lag(divida_lft,3),
+         divida_lft_lag4 = lag(divida_lft,4),
+         divida_lft_lag5 = lag(divida_lft,5),
+         divida_lft_lag6 = lag(divida_lft,6),
+         divida_lft_lag7 = lag(divida_lft,7),
+         divida_lft_lag8 = lag(divida_lft,8),
+         divida_lft_lag9 = lag(divida_lft,9),
+         divida_lft_lag10 = lag(divida_lft,10),
+         divida_lft_lag11 = lag(divida_lft,11),
+         divida_lft_lag12 = lag(divida_lft,12),
+         #
+         divida_ntnb_lag1 = lag(divida_ntnb,1),
+         divida_ntnb_lag2 = lag(divida_ntnb,2),
+         divida_ntnb_lag3 = lag(divida_ntnb,3),
+         divida_ntnb_lag4 = lag(divida_ntnb,4),
+         divida_ntnb_lag5 = lag(divida_ntnb,5),
+         divida_ntnb_lag6 = lag(divida_ntnb,6),
+         divida_ntnb_lag7 = lag(divida_ntnb,7),
+         divida_ntnb_lag8 = lag(divida_ntnb,8),
+         divida_ntnb_lag9 = lag(divida_ntnb,9),
+         divida_ntnb_lag10 = lag(divida_ntnb,10),
+         divida_ntnb_lag11 = lag(divida_ntnb,11),
+         divida_ntnb_lag12 = lag(divida_ntnb,12),
+         ) %>%
+  drop_na()
+
+#saveRDS(base,"base_mestrado.RDS")
+
+```
+
+## Normalizando os lags
+```{r}
+base <- readRDS("base_mestrado.RDS")
+
+base <- base %>% select(!contains("brax11_sa"))
+
+
+library(bestNormalize)
+best_norm <- function(col) { # create a function with the name my_function
+  bestNormalize::bestNormalize(col)[[1]]
+}
+
+set.seed(1234)
+base2 <- base %>% 
+  mutate_at(.vars = base %>% 
+              select(contains("lag")) %>%
+              variable.names(),
+            best_norm)
+```
+
+
+## Substituindo os valores por variações anuais
+
+```{r}
+yoy <- function(col){
+  case_when(col/lag(col,12) == "Inf"~1,
+            col/lag(col,12) == "-Inf" ~ -1,
+            TRUE ~ col/lag(col,12))
+}
+
+base2 <- base2 %>% 
+  mutate_at(.vars = base %>% 
+              select(-date,-crise_fin,-res_2529) %>%
+              variable.names(),
+            yoy)
+
+base2 <- base2 %>% drop_na()
+
+#saveRDS(base2,"base2_mestrado.RDS")
+```
+
+Grafico das variaveis
+
+```{r}
+library(gghighlight)
+
+base %>% select(!contains("lag"),-"crise_fin",-"res_2529") %>% pivot_longer(names_to = "variavel", cols = !contains("date")) %>% 
+  mutate(value = value - 1) %>% 
+  ggplot(aes(x = date, y = value, color = variavel))+
+  geom_line(color = "#0019ff", linewidth = 1.5)+
+  scale_x_date(breaks = "2 year",date_labels = "%Y-%m")+
+  scale_y_continuous(labels = scales::percent)+
+  gghighlight(variavel == "inad_cartao", label_key = variavel,use_group_by = F,use_direct_label = F,
+              unhighlighted_params = list(linewidth = 0.5, colour = alpha("grey", 1)))+
+  theme_minimal()+
+  labs(x = "Data", y = "%YoY")+
+  theme(axis.text.y = element_text(size = 10))
+```
+
+## Fazendo a tabela de correlação
+
+```{r}
+library(corrplot)
+correlacao <- stats::cor(base2 %>% select(-date), use = "all.obs")
+
+correlacao <- data.frame(coredata(correlacao)) %>% rownames_to_column("variavel") %>% select(variavel,inad_cartao) %>% 
+  mutate(cor_absoluta = abs(inad_cartao))
+
+data.frame(coredata(correlacao)) %>% rownames_to_column("variavel") %>% clipr::write_clip(dec = ",")
+
+correlacao %>% arrange(desc(cor_absoluta)) %>% 
+  select(-cor_absoluta)
+
+# optimal lag
+
+max_cor <- correlacao %>% 
+  select(-cor_absoluta) %>% 
+  mutate(var_sub = str_remove_all(variavel, "_lag[1-9][0-9]*")) %>% 
+  group_by(var_sub) %>% 
+  summarise(max_cor = max(abs(inad_cartao)))
+
+
+optimal_lag <- correlacao %>% 
+  select(-cor_absoluta) %>% 
+  mutate(var_sub = str_remove_all(variavel, "_lag[1-9][0-9]*"),
+         max_cor = abs(inad_cartao)) %>%
+  inner_join(max_cor, by = c("var_sub","max_cor"))
+
+optimal_lag %>% 
+  arrange(desc(max_cor)) %>% 
+  clipr::write_clip(dec = ",")
+
+# l <- cor.test(base2$inad_cartao,base2$res_2529)
+# l$p.value
+
+```
+
+## Lasso Regression with optimal lag
+
+```{r}
+  
+library(glmnet)
+base2_optimal_lag <- base2 %>% select(optimal_lag$variavel)
+
+set.seed(1233)
+
+# equacao
+
+X <- model.matrix(inad_cartao ~ ., data = base2_optimal_lag)[,-1]
+
+# variavel dependente
+
+Y <- base2_optimal_lag %>% pull(inad_cartao)
+
+# Escolhentdo o hyperparametro que minimiza MSE
+
+lambda_lasso <- cv.glmnet(X,Y, alpha = 1)
+
+plot(lambda_lasso)
+```
+
+```{r}
+lambda_lasso
+```
+
+### Resultados
+```{r}
+l.lasso.min <- lambda_lasso$lambda.min
+lasso.model <- glmnet(X,Y,
+                      alpha  = 1, 
+                      lambda = l.lasso.min)
+
+
+u <- lasso.model$beta
+
+lasso_vars <- summary(u) %>% as_tibble()
+
+lasso_vars_final <- data.frame(var = u %>% rownames(), index = 1:nrow(u)) %>% 
+  left_join(lasso_vars, by = c("index" = "i")) %>% 
+  drop_na() %>% 
+  mutate(relevancia = abs(x)/max(abs(x))) %>% 
+  filter(relevancia > 0.01)
+
+lasso_vars_final %>% clipr::write_clip(dec = ",")
+```
+
+
+```{r}
+base_pos_lasso <- base2 %>% select(date,inad_cartao,lasso_vars_final$var)
+
+base_pos_lasso %>% pivot_longer(names_to = "variavel", cols = !contains("date")) %>% 
+  ggplot(aes(x = date, y = value, color = variavel))+
+  geom_line()+
+  scale_x_date(breaks = "2 year",date_labels = "%Y-%m")+
+  theme_minimal()+
+  labs(x = "Data", y = "Valor (normalizado)")+
+  theme(legend.position = "bottom")
+
+```
+
+```{r}
+library(gt)
+library(stargazer)
+## MQO - Exercicio
+reg <- lm(inad_cartao ~ ., data = base_pos_lasso %>% select(-date))
+
+summary(lm(inad_cartao ~ ., data = base_pos_lasso %>% select(-date,, -ibc_br, -pib_mensal)))
+
+stargazer(reg, omit.stat=c("LL","ser","f"), ci=F, single.row=TRUE)
+```
+
+
+## Treinando o modelos.
+
+```{r}
+library(h2o)
+library(rsample)
+
+base_split <- base_pos_lasso %>% 
+  select(-date) %>% 
+  rsample::initial_split(,prop = 4/5)
+
+h2o.init()
+
+base_train <- as.h2o(training(base_split), destination_frame = "base_train")
+base_test <- as.h2o(testing(base_split), destination_frame = "base_test")
+base_total <- as.h2o( base_pos_lasso %>% 
+  select(-date), destination_fram = "base_split")
+```
+
+```{r}
+response <- "inad_cartao"
+predictors <- colnames(base_train)
+predictors <- predictors[predictors != response] 
+```
+
+```{r}
+model <- h2o.automl(x = predictors,
+                    y = response,
+                    training_frame = base_train,
+                    validation_frame = base_test,max_models = )
+```
+
+Melhores algoritimos
+```{r}
+lb <- h2o.get_leaderboard(object = model, extra_columns = "ALL") %>% as.data.frame()
+
+top <- lb %>% group_by(algo) %>% 
+  summarise(menor_algo = min(rmse)) %>% 
+  left_join(lb, by = c("menor_algo" = "rmse")) %>% 
+  select(-algo.y, -menor_algo)
+
+top
+
+# salvando modelos
+
+# for(i in 1:nrow(top)) {
+# 
+#     aml1 <- h2o.getModel(top$model_id[i]) # get model object in environment
+#     h2o.saveModel(object = aml1, getwd()) # pass that model object to h2o.saveModel as an argument
+# 
+#   }
+
+```
+
+Deep learning
+```{r}
+deeplearning <- h2o.getModel("DeepLearning_grid_2_AutoML_1_20241208_205743_model_41")
+#deeplearning <- h2o.loadModel("modelos machine learning/DeepLearning_grid_2_AutoML_2_20240717_202601_model_23")
+
+deeplearning
+
+deeplearning_perf <- h2o.performance(deeplearning)
+
+deeplearning_pred <- h2o.predict(deeplearning, newdata = base_total)
+
+h2o.mse(deeplearning, train = TRUE, valid = TRUE, xval = FALSE)
+
+h2o.r2(deeplearning)
+
+deeplearning_pred_df <- deeplearning_pred %>% as_tibble()
+
+base_predict <- base_pos_lasso %>% 
+  mutate(predict_dl = deeplearning_pred_df$predict)
+
+``` 
+
+Gradient Boosting Machine
+```{r}
+gbm <- h2o.getModel("GBM_grid_1_AutoML_1_20241208_205743_model_1")
+
+gbm_perf <- h2o.performance(gbm)
+
+gbm_pred <- h2o.predict(gbm, newdata = base_total)
+
+h2o.mse(gbm, train = TRUE, valid = TRUE, xval = FALSE)
+
+h2o.r2(gbm)
+
+gbm_varimp <- h2o.varimp(gbm)
+
+gbm_varimp %>% clipr::write_clip(dec = ",")
+
+gbm_pred_df <- gbm_pred %>% as_tibble()
+
+base_predict <- base_predict %>% 
+  mutate(predict_gbm = gbm_pred_df$predict)
+```
+
+Random Forest
+```{r}
+rf <- h2o.getModel("XRT_1_AutoML_1_20241208_205743")
+
+rf
+
+rf_perf <- h2o.performance(rf)
+
+rf_pred <- h2o.predict(rf, newdata = base_total)
+
+h2o.mse(rf, train = TRUE, valid = TRUE, xval = FALSE)
+
+h2o.r2(rf)
+
+rf_varimp <- h2o.varimp(rf)
+
+rf_varimp %>% clipr::write_clip(dec= ",")
+
+rf_pred_df <- rf_pred %>% as_tibble()
+
+base_predict <- base_predict %>% 
+  mutate(predict_rf = rf_pred_df$predict)
+```
+
+Stacked Ensemble
+```{r}
+stackensemble <- h2o.getModel("StackedEnsemble_BestOfFamily_4_AutoML_1_20241208_205743")
+
+stackensemble
+
+stackensemble_perf <- h2o.performance(stackensemble)
+
+stackensemble_pred <- h2o.predict(stackensemble, newdata = base_total)
+
+h2o.mse(stackensemble, train = TRUE, valid = TRUE, xval = FALSE)
+
+h2o.r2(stackensemble)
+
+stackensemble_pred_df <- stackensemble_pred %>% as_tibble()
+
+base_predict <- base_predict %>% 
+  mutate(predict_stackensemble = stackensemble_pred_df$predict)
+```
+
+GLM
+```{r}
+
+glm <- h2o.getModel("GLM_1_AutoML_1_20241208_205743")
+
+glm
+
+glm_perf <- h2o.performance(glm)
+
+glm_pred <- h2o.predict(glm, newdata = base_total)
+
+h2o.mse(glm, train = TRUE, valid = TRUE, xval = FALSE)
+
+h2o.r2(glm)
+
+glm_pred_df <- glm_pred %>% as_tibble()
+
+base_predict <- base_predict %>% 
+  mutate(predict_glm = glm_pred_df$predict)
+
+glm_varimp <- h2o.varimp(glm)
+
+glm_varimp %>% clipr::write_clip(dec = ",")
+
+
+glm@model$coefficients_table$p_value
+```
+
+
+```{r}
+glm2 <- h2o.glm(family = "gaussian",
+                        x = predictors,
+                        y = response,
+                        training_frame = base_train,
+                        validation_frame = base_test,
+                        lambda = 0.0181,
+                        compute_p_values = TRUE,
+                        generate_scoring_history = TRUE, nfolds = 5,link = "identity")
+
+
+glm2@model$coefficients_table %>% clipr::write_clip(dec= ",")
+```
+
+Predict
+```{r}
+base_predict %>% 
+  select(date, inad_cartao,contains("predict")) %>%
+  pivot_longer(names_to = "variavel", cols = !contains("date")) %>% 
+  mutate(value = value - 1) %>% 
+  ggplot(aes(x = date, y = value, color = variavel, linetype = variavel))+
+  geom_line(linewidth = 1)+
+  scale_x_date(breaks = "2 year",date_labels = "%Y-%m")+
+  scale_y_continuous(labels = scales::percent,n.breaks = 6)+
+  scale_color_manual(values = c("#0019ff","red","green", "grey", 
+                                "purple","pink","yellow"))+
+  scale_linetype_manual(values = c("solid","longdash","longdash","longdash","longdash","longdash"))+
+  theme_minimal()+
+  labs(x = "Data", y = "%YoY")+
+  theme(legend.position = c(0.1,0.75),
+        axis.text.y = element_text(size = 10))
+```
+
