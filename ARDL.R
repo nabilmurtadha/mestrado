@@ -190,6 +190,6 @@ correlacoes |> clipr::write_clip(dec = ",")
 
 # Modelo ARDL -------------------------------------------------------------
 
-
-
+saveRDS(base_ardl,file = "base_ardl.RDS")
+ 
 
