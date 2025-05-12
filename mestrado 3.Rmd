@@ -20,8 +20,6 @@ library(corrplot)
 
 ```
 
-
-
 ## Puxando os valores de inadimplência de cartão de crédito.
 
 # inadimplencia geral pessoa fisica
@@ -187,7 +185,6 @@ res_4549 <- data.frame(date = pib_mensal$date,
                         res_2529 = ifelse(pib_mensal$date > "2017-01-01",1,0))
 
 ```
-
 
 # Cambio
 ```{r}
