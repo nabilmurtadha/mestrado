@@ -8,7 +8,14 @@ library(bestNormalize)
 library(gghighlight)
 library(corrplot)
 library(tseries)
-
+library(dynamac)
+library(dynamac)
+library(tseries)
+library(urca)
+library(lmtest)
+library(readxl)
+library(dplyr)
+library(ARDL)
 
 # Selecionando as variáveis -----------------------------------------------
 
@@ -164,7 +171,6 @@ df_num <- base_ardl %>%
   drop_na()
 
 
-
 # Calcula correlação com inad_mercado
 cor_inad_mercado <- cor(df_num, df_num$inad_mercado, use = "pairwise.complete.obs")
 
@@ -190,6 +196,15 @@ correlacoes |> clipr::write_clip(dec = ",")
 
 # Modelo ARDL -------------------------------------------------------------
 
-saveRDS(base_ardl,file = "base_ardl.RDS")
- 
+#saveRDS(base_ardl,file = "base_ardl.RDS")
 
+
+modelo_ardl <- auto_ardl(inad_cartao ~ pib_mensal+selic_mensal+ipca_mensal+concessoes_ccredito+saldo_ccredito+tx_desemprego+cambio_dolar+crise_fin+prop_sld_ccredito_pib,
+                         data = df_num |> select(-inad_mercado, -saldo_credito, -concessoes_credito),
+                         max_order = 4,
+                         selection = "BIC")
+
+
+ardl1 <- modelo_ardl$best_model
+
+summary(ardl1)
