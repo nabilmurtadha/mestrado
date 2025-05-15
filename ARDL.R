@@ -199,12 +199,47 @@ correlacoes |> clipr::write_clip(dec = ",")
 #saveRDS(base_ardl,file = "base_ardl.RDS")
 
 
-modelo_ardl <- auto_ardl(inad_cartao ~ pib_mensal+selic_mensal+ipca_mensal+concessoes_ccredito+saldo_ccredito+tx_desemprego+cambio_dolar+crise_fin+prop_sld_ccredito_pib,
+## Modelo sem correção dos erros
+
+modelo_ardl <- auto_ardl(inad_cartao ~ pib_mensal+selic_mensal+ipca_mensal+concessoes_ccredito+tx_desemprego+cambio_dolar+crise_fin+prop_sld_ccredito_pib,
                          data = df_num |> select(-inad_mercado, -saldo_credito, -concessoes_credito),
-                         max_order = 4,
+                         max_order = 5,
                          selection = "BIC")
 
 
 ardl1 <- modelo_ardl$best_model
 
 summary(ardl1)
+
+modelo_ardl$top_orders |> head(1) # (2,1,1,0,4,1,0,0,0) BIC = -59.37
+
+## Modelo UECM (Unrestricted Error Correction Model)
+
+uecm_ardl1 <- uecm(ardl1)
+
+summary(uecm_ardl1)
+
+##  RECM (Restricted Error Correction Model) 
+
+ardl1_case2 <- recm(uecm_ardl1, case = 2)
+
+summary(ardl1_case2)
+
+
+ardl1_case3 <- recm(uecm_ardl1, case = 3)
+
+summary(ardl1_case3)
+
+
+## bound test
+
+bounds_f_test(ardl1, case = 2, alpha = 0.01)
+
+## resumo
+
+multipliers(ardl1, type = "sr")
+multipliers(ardl1)
+
+
+## Previsão
+
