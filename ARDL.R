@@ -16,6 +16,9 @@ library(lmtest)
 library(readxl)
 library(dplyr)
 library(ARDL)
+library(h2o)
+library(rsample)
+
 
 # Selecionando as variáveis -----------------------------------------------
 
@@ -238,8 +241,60 @@ bounds_f_test(ardl1, case = 2, alpha = 0.01)
 ## resumo
 
 multipliers(ardl1, type = "sr")
-multipliers(ardl1)
+x <- multipliers(ardl1)
+
+delay_mult <- multipliers(ardl1, type = 6, se = TRUE)
+
+plot_delay(delay_mult)
+
+m <- multipliers(modelo_ardl, variable = "selic_mensal", horizon = 10)
 
 
-## Previsão
+# Machine Learning --------------------------------------------------------
 
+modelo_ardl$top_orders |> head(1) 
+
+# gerando a base
+
+base_ml <- df_num |> 
+  select(-saldo_credito, -prop_sld_credito_pib, -saldo_ccredito, -inad_mercado) |> 
+  # criando os lags conforme ardl
+  mutate(inad_cartao_1 = lag(inad_cartao,1),
+         inad_cartao_2 = lag(inad_cartao,2),
+         inad_cartao_3 = lag(inad_cartao,3),
+         inad_cartao_4 = lag(inad_cartao,4),
+         selic_mensal_1 = lag(selic_mensal,1),
+         selic_mensal_2 = lag(selic_mensal,2),
+         ipca_mensal_1 = lag(ipca_mensal,1),
+         ipca_mensal_2 = lag(ipca_mensal,2),
+         ipca_mensal_3 = lag(ipca_mensal,3),
+         crise_fin_1 = lag(crise_fin,1),
+         crise_fin_2 = lag(crise_fin,2),
+         crise_fin_3 = lag(crise_fin,3),
+         crise_fin_4 = lag(crise_fin,4),
+         prop_sld_ccredito_pib_1 = lag(prop_sld_ccredito_pib,1),
+         prop_sld_ccredito_pib_2 = lag(prop_sld_ccredito_pib,2),
+         prop_sld_ccredito_pib_3 = lag(prop_sld_ccredito_pib,3),
+         prop_sld_ccredito_pib_4 = lag(prop_sld_ccredito_pib,4),
+         prop_sld_ccredito_pib_5 = lag(prop_sld_ccredito_pib,5))
+
+
+# split
+
+base_split <- base_ml %>% 
+  rsample::initial_split(,prop = 4/5)
+
+h2o.init()
+
+base_train <- as.h2o(training(base_split), destination_frame = "base_train")
+base_test <- as.h2o(testing(base_split), destination_frame = "base_test")
+
+response <- "inad_cartao"
+predictors <- colnames(base_train)
+predictors <- predictors[predictors != response] 
+
+# subindo modelo
+model <- h2o.automl(x = predictors,
+                    y = response,
+                    training_frame = base_train,
+                    validation_frame = base_test,max_models =  30)
